@@ -1,13 +1,57 @@
 
 
 mod Armeria {
+  pub enum HttpMethod with Eq {
+    case Get, Post, Put, Delete, Options, Head, Patch, Undefined
+  }
+
+  pub enum HttpStatus with Eq {
+    case Ok, NotFound, ServerError, BadRequest
+  }
+
+  pub type alias HttpRequest = { 
+    target = String,        
+    method = HttpMethod,
+    contentType = Option[String], 
+    body = Option[String],
+    headers = Map[String, String]
+  }
+
+  pub type alias HttpResponse = { 
+    status = HttpStatus,
+    contentType = Option[String], 
+    body = Option[String], 
+    headers = Map[String, String] }
+
+  pub def ok(body: String, contentType: String): HttpResponse  =
+    {body = Some(body), status = HttpStatus.Ok, contentType = Some(contentType), headers = Map#{}}
+
+  pub def badRequest(body: String, contentType: String): HttpResponse  =
+    {body = Some(body), status = HttpStatus.BadRequest, contentType = Some(contentType), headers = Map#{}}
+
+  pub def serverError(body: String, contentType: String): HttpResponse  =
+    {body = Some(body), status = HttpStatus.ServerError, contentType = Some(contentType), headers = Map#{}}
+
+  pub def notFound(contentType: String): HttpResponse  =
+    {body = None, status = HttpStatus.NotFound, contentType = Some(contentType), headers = Map#{}}
+
+  pub type alias Route = { 
+    method = HttpMethod, 
+    target = String, 
+    handle = (HttpRequest) -> HttpResponse }
+}
+
+mod ArmeriaApi {
   import com.linecorp.armeria.common.HttpRequest;
   import com.linecorp.armeria.common.HttpResponse;
+  import com.linecorp.armeria.common.RequestHeaders;
+  
   import com.linecorp.armeria.common.HttpStatus;
   import com.linecorp.armeria.common.MediaType;
   import com.linecorp.armeria.common.MediaTypeNames;
   import com.linecorp.armeria.common.QueryParams;
   import com.linecorp.armeria.common.HttpMethod;
+  import com.linecorp.armeria.common.HttpHeaderGetters;
   import com.linecorp.armeria.server.AbstractHttpService;
   import com.linecorp.armeria.server.Server;
   import com.linecorp.armeria.server.ServerBuilder;
@@ -23,77 +67,78 @@ mod Armeria {
   import java.util.concurrent.CompletableFuture;
   import java.lang.Object;
   import java.lang.Void;
+  import java.lang.Character;
+  import java.lang.CharSequence;
 
-  enum Method with Eq {
-    case Get, Post, Put, Delete, Options, Undefined
-  }
-
-  enum State with Eq {
-    case Ok, NotFound, ServerError, BadRequest
-  }
-
-  pub type alias Request = { method = Method }
-
-  pub type alias Response = { 
-    body = String, 
-    state = State,
-    contentType = String, 
-    headers = Map[String, String] }
-
-  pub def responseStr(body: String): Response  =
-    {body = body, state = State.Ok, contentType = "text/plain", headers = Map#{}}
-
-  pub def responseStrWithState(state: State, body: String): Response  =
-    {body = body, state = state, contentType = "text/plain", headers = Map#{}}
-
-  pub def responseStrWithStateHeaders(state: State, body: String, headers: Map[String, String]): Response  =
-    {body = body, state = state, contentType = "text/plain", headers = headers}
-
-  pub type alias Service = { 
-    method = Method, 
-    path = String, 
-    f = (Request) -> Response }
-  
   def responseOfString(s: String): HttpResponse \ IO =
     import static com.linecorp.armeria.common.HttpResponse.of(String): HttpResponse \ IO as of_;
     of_(s)
 
-  def responseOfState(state: State): HttpResponse \ IO =
+  def responseOfStatus(status: Armeria.HttpStatus): HttpResponse \ IO =
     import static com.linecorp.armeria.common.HttpResponse.of(Int32): HttpResponse \ IO as of_;
-    match state {
-      case State.Ok => of_(200)
-      case State.NotFound => of_(404)
-      case State.ServerError => of_(500)
-      case _ => of_(404)
+    match status {
+      case Armeria.HttpStatus.Ok => of_(200)
+      case Armeria.HttpStatus.NotFound => of_(404)
+      case Armeria.HttpStatus.ServerError => of_(500)
+      case Armeria.HttpStatus.BadRequest => of_(404)
     }
 
-  def convertHttpMethod(req: HttpRequest): Method \ IO =
+  def convertRequest(req: HttpRequest): Armeria.HttpRequest \ IO =
     import com.linecorp.armeria.common.HttpRequest.method(): HttpMethod \ {} as requestMethod;
+    import com.linecorp.armeria.common.HttpRequest.path(): String \ IO as requestPath;
     import com.linecorp.armeria.common.HttpMethod.name(): String \ IO as enumName;
-    match req |> requestMethod |> enumName {
-      case "GET" => Method.Get
-      case "POST" => Method.Post
-      case "PUT" => Method.Put
-      case "DELETE" => Method.Delete
-      case "OPTIONS" => Method.Options
-      case _ => Method.Undefined
-    }
+    import com.linecorp.armeria.common.HttpRequest.headers(): RequestHeaders \ IO as requestHeaders;
+    import com.linecorp.armeria.common.RequestHeaders.names() : ##java.util.Set \ IO as headersNames;
+    import com.linecorp.armeria.common.RequestHeaders.get(##java.lang.CharSequence) : String \ IO as headersGet;    
 
-  def newServiceSpec(spec: Service): HttpService \ IO = new HttpService {
+    let method = match req |> requestMethod |> enumName {
+      case "GET" => Armeria.HttpMethod.Get
+      case "POST" => Armeria.HttpMethod.Post
+      case "PUT" => Armeria.HttpMethod.Put
+      case "DELETE" => Armeria.HttpMethod.Delete
+      case "OPTIONS" => Armeria.HttpMethod.Options
+      case "HEAD" => Armeria.HttpMethod.Head
+      case "PATCH" => Armeria.HttpMethod.Patch
+      case _ => Armeria.HttpMethod.Undefined
+    };
+    
+    let target = req |> requestPath;  
+    let reqHeaders = req |> requestHeaders;
+    let setOfNames = reqHeaders |> headersNames;
+    let names: Set[String] = setOfNames |> Adaptor.fromSet;
+    let headers: Map[String, String] = Set.foldRight((name, m) -> Map.insert(name, headersGet(reqHeaders, checked_cast(name)), m), Map#{}, names);  
+
+    let contentType = match Map.find((k, _) -> k == "content-type", headers) {
+      case Some((_, v)) => Some(v)
+      case _ => None
+    };
+    {target = target, method = method, contentType = contentType, body = None, headers = headers}
+
+  def newServiceSpec(spec: Armeria.Route): HttpService \ IO = new HttpService {
     def serve(_this: HttpService, _ctx: ServiceRequestContext, req: HttpRequest): HttpResponse \ IO =  
-      let m = convertHttpMethod(req);
-      if (m == spec.method) {
-        let resp = spec.f({method = m});
-        responseOfString(resp.body)
-      } else responseOfState(State.NotFound)
+
+      let request = convertRequest(req);
+
+      match request.method {
+        case Armeria.HttpMethod.Undefined =>
+          responseOfStatus(Armeria.HttpStatus.ServerError)
+        case method =>
+          if (method == spec.method) {
+            let resp = spec.handle(request);
+            match resp.body {
+              case Some(body) => responseOfString(body)
+              case None => responseOfStatus(resp.status)
+            }
+          } else responseOfStatus(Armeria.HttpStatus.NotFound)
+      }
   }
 
-  def addService(builder: ServerBuilder, service: Service): Unit \ IO =
+  def addService(builder: ServerBuilder, service: Armeria.Route): Unit \ IO =
     import com.linecorp.armeria.server.ServerBuilder.service(String, HttpService): ServerBuilder \ IO as serverService;
-    serverService(builder, service.path, newServiceSpec(service));
+    serverService(builder, service.target, newServiceSpec(service));
     ()
 
-  pub def start(port: Int32, services: List[Service]): Unit \ IO =
+  pub def start(port: Int32, services: List[Armeria.Route]): Unit \ IO =
     import static com.linecorp.armeria.server.Server.builder(): ServerBuilder \ IO as newBuilder;
     import com.linecorp.armeria.server.ServerBuilder.build(): Server \ IO as serverBuild;
     import com.linecorp.armeria.server.ServerBuilder.http(Int32): ServerBuilder \ IO as serverHttp;
@@ -110,8 +155,8 @@ mod Armeria {
 }
 
 def main(): Unit \ IO = 
-  let services: List[Armeria.Service] = 
-    { method = Armeria.Method.Get, 
-      path = "/", 
-      f = (_req) -> Armeria.responseStr("hello!!") } :: Nil;
-  Armeria.start(8181, services)
+  let services: List[Armeria.Route] = 
+    { method = Armeria.HttpMethod.Get, 
+      target = "/", 
+      handle = (_req) -> Armeria.ok("hello!!", "text/plain") } :: Nil;
+  ArmeriaApi.start(8181, services)
