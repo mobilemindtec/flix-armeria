@@ -1,4 +1,2 @@
-# flix
-
-Enter some useful information.
-
+# flix-armeria
+Flix Armeria
