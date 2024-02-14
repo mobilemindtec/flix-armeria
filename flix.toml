@@ -1,0 +1,13 @@
+[package]
+name        = "flix"
+description = "test"
+version     = "0.1.0"
+flix        = "0.44.0"
+authors     = ["John Doe <john@example.com>"]
+
+[mvn-dependencies]
+"org.junit.jupiter:junit-jupiter-api" = "5.9.2"
+"com.linecorp.armeria:armeria" = "1.27.1"
+"ch.qos.logback:logback-classic" = "1.4.7"
+"org.slf4j:log4j-over-slf4j" = "1.7.36"
+#"io.netty:netty-all" = "5.0.0.Alpha2"
