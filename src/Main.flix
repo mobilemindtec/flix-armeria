@@ -45,7 +45,7 @@ mod ArmeriaApi {
   import com.linecorp.armeria.common.HttpRequest;
   import com.linecorp.armeria.common.HttpResponse;
   import com.linecorp.armeria.common.RequestHeaders;
-  
+  import com.linecorp.armeria.common.DefaultRequestHeaders;
   import com.linecorp.armeria.common.HttpStatus;
   import com.linecorp.armeria.common.MediaType;
   import com.linecorp.armeria.common.MediaTypeNames;
@@ -69,6 +69,8 @@ mod ArmeriaApi {
   import java.lang.Void;
   import java.lang.Character;
   import java.lang.CharSequence;
+  import java.lang.Thread
+  import java.lang.Class;
 
   def responseOfString(s: String): HttpResponse \ IO =
     import static com.linecorp.armeria.common.HttpResponse.of(String): HttpResponse \ IO as of_;
@@ -88,8 +90,10 @@ mod ArmeriaApi {
     import com.linecorp.armeria.common.HttpRequest.path(): String \ IO as requestPath;
     import com.linecorp.armeria.common.HttpMethod.name(): String \ IO as enumName;
     import com.linecorp.armeria.common.HttpRequest.headers(): RequestHeaders \ IO as requestHeaders;
-    import com.linecorp.armeria.common.RequestHeaders.names() : ##java.util.Set \ IO as headersNames;
-    import com.linecorp.armeria.common.RequestHeaders.get(##java.lang.CharSequence) : String \ IO as headersGet;    
+    import com.linecorp.armeria.common.HttpHeaders.names() : ##java.util.Set \ IO as headersNames;
+    import com.linecorp.armeria.common.HttpHeaders.get(##java.lang.CharSequence) : String \ IO as headersGet;    
+    import java.lang.Object.getClass(): Class \ IO as getClass;
+    import java.lang.Class.getName(): String \ IO as getClassName;
 
     let method = match req |> requestMethod |> enumName {
       case "GET" => Armeria.HttpMethod.Get
@@ -104,9 +108,12 @@ mod ArmeriaApi {
     
     let target = req |> requestPath;  
     let reqHeaders = req |> requestHeaders;
-    let setOfNames = reqHeaders |> headersNames;
+    let setOfNames = checked_cast(reqHeaders) |> headersNames;
+
+    println(checked_cast(reqHeaders) |> getClass |> getClassName);
+
     let names: Set[String] = setOfNames |> Adaptor.fromSet;
-    let headers: Map[String, String] = Set.foldRight((name, m) -> Map.insert(name, headersGet(reqHeaders, checked_cast(name)), m), Map#{}, names);  
+    let headers: Map[String, String] = Set.foldRight((name, m) -> Map.insert(name, headersGet(checked_cast(reqHeaders), checked_cast(name)), m), Map#{}, names);  
 
     let contentType = match Map.find((k, _) -> k == "content-type", headers) {
       case Some((_, v)) => Some(v)
@@ -138,20 +145,33 @@ mod ArmeriaApi {
     serverService(builder, service.target, newServiceSpec(service));
     ()
 
+  def thread_join(): Unit \ IO =
+    import static java.lang.Thread.currentThread(): Thread \ IO;
+    import java.lang.Thread.join(): Unit \ IO as join;
+    let t: Thread = currentThread();
+    t |> join;
+    ()
+    
+    
+
+
   pub def start(port: Int32, services: List[Armeria.Route]): Unit \ IO =
     import static com.linecorp.armeria.server.Server.builder(): ServerBuilder \ IO as newBuilder;
+    import com.linecorp.armeria.server.Server.closeOnJvmShutdown(): Void \ IO as closeOnJvmShutdown;    
     import com.linecorp.armeria.server.ServerBuilder.build(): Server \ IO as serverBuild;
     import com.linecorp.armeria.server.ServerBuilder.http(Int32): ServerBuilder \ IO as serverHttp;
     import com.linecorp.armeria.server.Server.start(): CompletableFuture \ IO as serverStart;
-    import java.util.concurrent.CompletableFuture.join(): ##java.lang.Object \ IO as join;
+    import java.util.concurrent.CompletableFuture.join(): Object \ IO as join;
+    
     let builder = newBuilder();
     serverHttp(builder, port);
     foreach(s <- services)
       addService(builder, s);      
     //serverService(builder, "/", indexService());
-    builder |> serverBuild |> serverStart |> join;
-    ()
-
+    let server = builder |> serverBuild;
+    server |> closeOnJvmShutdown;
+    server |> serverStart |> join;        
+    thread_join()
 }
 
 def main(): Unit \ IO = 
